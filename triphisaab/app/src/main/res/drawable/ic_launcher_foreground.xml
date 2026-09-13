@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Mountain Peaks (Karakoram / Khunjerab) -->
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M24,70 L48,34 L72,70 Z" />
+    <path
+        android:fillColor="#BAE6FD"
+        android:pathData="M52,70 L72,40 L92,70 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,34 L40,46 L56,46 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M72,40 L65,50 L79,50 Z" />
+    <!-- Highway Road -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M46,70 L52,54 L56,54 L62,70 Z" />
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="1.5"
+        android:pathData="M54,56 L54,70" />
+    <!-- Budget Coin / Badge with Rs currency mark -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M38,76 A14,14 0 1,0 66,76 A14,14 0 1,0 38,76 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M47,70 H55 C57,70 58.5,71.5 58.5,73.5 C58.5,75.5 57,77 55,77 H47 Z M51,77 L57,83 M45,73 H59 M45,76 H56"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1" />
+</vector>

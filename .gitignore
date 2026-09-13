@@ -1,0 +1,37 @@
+# Gradle and Build Cache
+.gradle/
+**/build/
+build/
+*.log
+ksp_log.txt
+
+# IDE & Editor files
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# Android Studio & Build Artifacts
+/local.properties
+local.properties
+*.apk
+*.ap_
+*.aab
+*.dex
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystores & Signing Secrets
+*.jks
+*.keystore
+debug.keystore
+
+# Environment & Secrets
+.env
+.env.local
+
+# OS generated files
+.DS_Store
+Thumbs.db

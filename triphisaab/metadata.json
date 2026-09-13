@@ -1,0 +1,8 @@
+{
+  "name": "triphisaab",
+  "description": "Native Android expense assistant for motorcycle preparation and Islamabad-Khunjerab trip with WhatsApp Business notification pairing and offline ledger.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
