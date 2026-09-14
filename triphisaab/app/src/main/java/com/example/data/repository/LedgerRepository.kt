@@ -62,7 +62,9 @@ class LedgerRepository(
         val categoryBreakdown: Map<String, Long>,
         val dateRange: String?,
         val hasRecords: Boolean
-    )
+    ) {
+        val canonicalPlaceName: String get() = placeName
+    }
 
     data class CounterpartySummary(
         val name: String,
@@ -298,7 +300,7 @@ class LedgerRepository(
             transactions = pagedTransactions,
             categoryBreakdown = catBreakdown,
             dateRange = dateRange,
-            hasRecords = true
+            hasRecords = count > 0 || totalSpent > 0L || incoming > 0L
         )
     }
 

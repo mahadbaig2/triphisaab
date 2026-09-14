@@ -35,7 +35,15 @@ jobs:
       - name: Run Unit Tests
         run: |
           cd triphisaab
-          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace --info
+
+      - name: Upload Test Report on Failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports
+          path: triphisaab/app/build/reports/tests/
+          retention-days: 7
 
       - name: Build Debug APK
         run: |
