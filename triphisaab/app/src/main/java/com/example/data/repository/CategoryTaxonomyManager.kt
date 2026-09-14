@@ -91,10 +91,17 @@ class CategoryTaxonomyManager(
 
         fun detectFromKeywords(text: String): AliasResult? {
             val t = text.lowercase(Locale.ROOT)
+
+            // 1. Check comprehensive TaxonomyData first
+            val matched = TaxonomyData.findMatchingSubcategory(t)
+            if (matched != null) {
+                return AliasResult(matched.first.name, matched.second.name)
+            }
+
             return when {
                 // Fuel
                 t.contains("petrol") || t.contains("diesel") || t.contains("fuel") || t.contains("fueling") || t.contains("cng") || t.contains("tanki") ->
-                    AliasResult("Transport", "Fuel")
+                    AliasResult("Transport", "Motorcycle Fuel")
 
             // Taxi / Local transport
             t.contains("taxi") || t.contains("cab") || t.contains("rickshaw") || t.contains("rikshaw") || t.contains("auto") ||

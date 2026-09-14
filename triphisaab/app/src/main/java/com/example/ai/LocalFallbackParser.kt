@@ -13,10 +13,15 @@ object LocalFallbackParser {
     // - Price quotes / inquiries ("helmet 3500 ka mil raha hai", "rate kya hai")
     // - Shared shopping links containing a price
     // - Meeting or calendar chatter
+    // Non-expense signals per PRD:
+    // - Future intent / reminders ("kal petrol ke liye 2000 rakhna", "dena hai" without having given it)
+    // - Price quotes / inquiries ("helmet 3500 ka mil raha hai", "rate kya hai")
+    // - Shared shopping links containing a price
+    // - Meeting or calendar chatter
     private val NON_EXPENSE_PHRASES = listOf(
         "mil raha", "milta hai", "rate kya", "price kya", "available hai", "quote",
-        "rakhna", "rakh lo", "rakh lena", "kal ke liye", "ke liye rakh", "dena hai",
-        "denay hain", "bhejna", "salary", "tankhwah", "meeting", "call me", "http://", "https://", "www."
+        "rakhna", "rakh lo", "rakh lena", "kal ke liye", "ke liye rakh",
+        "meeting", "call me", "http://", "https://", "www."
     )
 
     fun parse(rawText: String): ClassifierResponse {
@@ -29,6 +34,140 @@ object LocalFallbackParser {
                 return ClassifierResponse(
                     action = "IGNORE",
                     certainty = "clear",
+                    evidence = text
+                )
+            }
+        }
+
+        // 1b. Income / Added funds patterns:
+        // e.g. "bhai ne 5000 bhej diye", "abbaji ne 10000 bheje", "salary 50000 aagayi", "received 5000 from Ali", "5000 mil gaye"
+        val incomePattern1 = Pattern.compile("^(.*?)(?:\\s+ne)?\\s+(?:rs\\.?\\s*)?([\\d,\\.]+)(?:\\s*k)?\\s+(?:bhej\\s+diye|bheje|transfer\\s+kiya|diye|send\\s+kiye|bhej\\s+diya)\\s*$", Pattern.CASE_INSENSITIVE)
+        val mInc1 = incomePattern1.matcher(text)
+        if (mInc1.matches()) {
+            val sender = mInc1.group(1)?.trim() ?: ""
+            val amt = parseNumericAmount(mInc1.group(2))
+            if (amt != null && amt > 0) {
+                val cleanSender = sender.replace(Regex("(?i)\\b(ne|se|bhai|friend)\\b"), "").trim()
+                val cp = if (cleanSender.isNotBlank()) titleCase(cleanSender) else if (sender.isNotBlank()) titleCase(sender) else "Incoming"
+                return ClassifierResponse(
+                    action = "RECORD_TRANSACTION",
+                    certainty = "clear",
+                    expenses = listOf(
+                        ClassifierExpenseItem(
+                            description = if (sender.isNotBlank()) "$sender se transfer" else "Incoming Funds",
+                            amountDecimal = amt.toString(),
+                            type = "INCOME",
+                            direction = "INCOMING",
+                            counterparty = cp,
+                            category = "Income",
+                            subcategory = "Transfer / Gift"
+                        )
+                    ),
+                    evidence = text
+                )
+            }
+        }
+
+        val incomePattern2 = Pattern.compile("^(?:salary|tankhwah|income)\\s*(?:-|:)?\\s*(?:rs\\.?\\s*)?([\\d,\\.]+)(?:\\s*k)?(?:\\s+aagayi|\\s+mili|\\s+received)?", Pattern.CASE_INSENSITIVE)
+        val mInc2 = incomePattern2.matcher(text)
+        if (mInc2.find()) {
+            val amt = parseNumericAmount(mInc2.group(1))
+            if (amt != null && amt > 0) {
+                return ClassifierResponse(
+                    action = "RECORD_TRANSACTION",
+                    certainty = "clear",
+                    expenses = listOf(
+                        ClassifierExpenseItem(
+                            description = "Salary",
+                            amountDecimal = amt.toString(),
+                            type = "INCOME",
+                            direction = "INCOMING",
+                            category = "Income",
+                            subcategory = "Salary"
+                        )
+                    ),
+                    evidence = text
+                )
+            }
+        }
+
+        // 1c. Loan given / Udhaar diya patterns:
+        // e.g. "Qaisar ko udhaar 5000 diya", "Ali ko 2000 udhar diye", "loan given 5000 to Qaisar"
+        val loanGivenPattern = Pattern.compile("^(.*?)(?:\\s+ko)?\\s+(?:udhaar|udhar|loan)\\s+(?:rs\\.?\\s*)?([\\d,\\.]+)(?:\\s*k)?(?:\\s+diya|\\s+diye)?\\s*$", Pattern.CASE_INSENSITIVE)
+        val mLoanGiven = loanGivenPattern.matcher(text)
+        if (mLoanGiven.matches()) {
+            val person = mLoanGiven.group(1)?.replace(Regex("(?i)\\bko\\b"), "")?.trim() ?: "Counterparty"
+            val amt = parseNumericAmount(mLoanGiven.group(2))
+            if (amt != null && amt > 0) {
+                val cp = titleCase(person)
+                return ClassifierResponse(
+                    action = "RECORD_TRANSACTION",
+                    certainty = "clear",
+                    expenses = listOf(
+                        ClassifierExpenseItem(
+                            description = "Loan to $cp",
+                            amountDecimal = amt.toString(),
+                            type = "LOAN_GIVEN",
+                            direction = "OUTGOING",
+                            counterparty = cp,
+                            category = "Lending",
+                            subcategory = "Personal Loan"
+                        )
+                    ),
+                    evidence = text
+                )
+            }
+        }
+
+        // 1d. Loan repayment received patterns:
+        // e.g. "Qaisar ne udhaar wapas kiya 5000", "Ali ne 2000 udhar wapas kiya"
+        val loanRepayPattern = Pattern.compile("^(.*?)(?:\\s+ne)?\\s+(?:udhaar|udhar|loan)?\\s*(?:wapas\\s+kiya|repaid|lautaya)\\s+(?:rs\\.?\\s*)?([\\d,\\.]+)(?:\\s*k)?\\s*$", Pattern.CASE_INSENSITIVE)
+        val mLoanRepay = loanRepayPattern.matcher(text)
+        if (mLoanRepay.matches()) {
+            val person = mLoanRepay.group(1)?.replace(Regex("(?i)\\bne\\b"), "")?.trim() ?: "Counterparty"
+            val amt = parseNumericAmount(mLoanRepay.group(2))
+            if (amt != null && amt > 0) {
+                val cp = titleCase(person)
+                return ClassifierResponse(
+                    action = "RECORD_TRANSACTION",
+                    certainty = "clear",
+                    expenses = listOf(
+                        ClassifierExpenseItem(
+                            description = "Loan repayment from $cp",
+                            amountDecimal = amt.toString(),
+                            type = "LOAN_REPAYMENT_RECEIVED",
+                            direction = "INCOMING",
+                            counterparty = cp,
+                            category = "Lending",
+                            subcategory = "Loan Repayment"
+                        )
+                    ),
+                    evidence = text
+                )
+            }
+        }
+
+        // 1e. Refund patterns:
+        // e.g. "hotel refund 1500 mila", "1500 refund received from hotel"
+        val refundPattern = Pattern.compile("^(.*?)\\s*refund\\s*(?:rs\\.?\\s*)?([\\d,\\.]+)(?:\\s*k)?(?:\\s+mila|\\s+received)?\\s*$", Pattern.CASE_INSENSITIVE)
+        val mRefund = refundPattern.matcher(text)
+        if (mRefund.matches()) {
+            val item = mRefund.group(1)?.trim() ?: "General"
+            val amt = parseNumericAmount(mRefund.group(2))
+            if (amt != null && amt > 0) {
+                return ClassifierResponse(
+                    action = "RECORD_TRANSACTION",
+                    certainty = "clear",
+                    expenses = listOf(
+                        ClassifierExpenseItem(
+                            description = "$item Refund",
+                            amountDecimal = amt.toString(),
+                            type = "REFUND_RECEIVED",
+                            direction = "INCOMING",
+                            category = "Refund",
+                            subcategory = null
+                        )
+                    ),
                     evidence = text
                 )
             }

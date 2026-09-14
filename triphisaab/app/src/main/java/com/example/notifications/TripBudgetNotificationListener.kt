@@ -142,14 +142,20 @@ class TripBudgetNotificationListener : NotificationListenerService() {
                 return@launch
             }
 
+            // Section 1: Activation rule - Everything requires @chat token
+            if (!app.unifiedAgent.isChatTokenActivated(text)) {
+                // Unprefixed message: zero AI calls, zero financial writes, zero replies, zero location capture, zero retained bodies
+                return@launch
+            }
+
             // Cache reply action for paired conversation
             if (replyAction != null) {
                 ReplyExecutor.storeReplyAction(activePaired.conversationId, replyAction.first, replyAction.second)
             }
 
-            // Enqueue into budget processing engine
+            // Enqueue into unified budget agent
             val eventIdentity = "${sbn.key}_${messageTime}_${text.hashCode()}"
-            app.budgetEngine.enqueueEvent(
+            app.unifiedAgent.enqueueEvent(
                 conversationId = activePaired.conversationId,
                 eventIdentity = eventIdentity,
                 messageText = text,

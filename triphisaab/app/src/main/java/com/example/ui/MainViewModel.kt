@@ -30,6 +30,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // UI state flows
     val activeBudget = ledgerRepository.activeBudgetFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val totalSpent = ledgerRepository.totalSpentFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+    val addedFunds = ledgerRepository.addedFundsFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+    val cashOut = ledgerRepository.cashOutFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+    val expenseSpending = ledgerRepository.expenseSpendingFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
     val recentExpenses = ledgerRepository.recentExpensesFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allActiveExpenses = ledgerRepository.allActiveExpensesFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allPlaces = ledgerRepository.allPlacesFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -42,6 +45,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val isTrackingActive = LocationTrackingService.isSessionActive
     val diagnosticsState = ListenerDiagnostics.state
+
+    // Location Dashboard Snapshot
+    private val _latestLocationSnapshot = MutableStateFlow<LocationSnapshot?>(null)
+    val latestLocationSnapshot: StateFlow<LocationSnapshot?> = _latestLocationSnapshot.asStateFlow()
+    val isRefreshingLocation = MutableStateFlow(false)
+
+    fun refreshLocation() {
+        viewModelScope.launch {
+            isRefreshingLocation.value = true
+            try {
+                val snapshot = app.locationProvider.captureCandidateSnapshot(System.currentTimeMillis())
+                _latestLocationSnapshot.value = snapshot
+                showMessage("Location updated: ${snapshot.locality ?: "Captured"}")
+            } catch (e: Exception) {
+                showMessage("Failed to refresh location: ${e.message}")
+            } finally {
+                isRefreshingLocation.value = false
+            }
+        }
+    }
 
     private val groqClassifier = com.example.ai.GroqClassifier(settingsRepository)
     val modelTestState = MutableStateFlow<com.example.ai.TestModelResult?>(null)
@@ -313,13 +336,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val paired = pairedConversation.value
                 val convId = paired?.conversationId ?: shortcutId
-                app.budgetEngine.enqueueEvent(
+                app.unifiedAgent.enqueueEvent(
                     conversationId = convId,
                     eventIdentity = "demo_event_${System.currentTimeMillis()}",
                     messageText = text,
                     messageTime = System.currentTimeMillis()
                 )
-                showMessage("[Demo Fixture] Processed: '$text'")
+                showMessage("[Demo Fixture] Processed via UnifiedAgent: '$text'")
             }
         }
     }

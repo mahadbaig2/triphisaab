@@ -26,48 +26,48 @@ No servers, no webhooks, no subscriptions, and no privacy leaks.
   - Zero third-party bot servers or paid Meta WhatsApp Cloud API accounts needed.
   - Sends immediate confirmations and answers back in the WhatsApp chat via Android `RemoteInput` notification actions.
 
+- **⚡ Activation Rule: Everything Requires `@chat`**
+  - To ensure 100% intentional interaction and avoid processing non-expense personal banter, **every command and query must begin with the `@chat` token** (case-insensitive).
+  - Unprefixed messages trigger **0 AI calls, 0 financial writes, 0 replies, 0 location captures, and 0 retained message text**.
+  - Sending bare `@chat` displays a friendly interactive usage guide.
+  - Examples:
+    - `@chat petrol 2200` → Record fuel spending
+    - `@chat petroll - 2,200` → Record fuel spending with hyphen/typo tolerance
+    - `@chat bhai ne 5000 bhej diye` → Record incoming funds / income
+    - `@chat Qaisar ko udhaar 5000 diya` → Record personal loan given
+    - `@chat set total budget to 50,000` → Atomically replace authoritative base budget
+    - `@chat Islamabad ka total kharcha` → Place-specific itemized ledger summary
+    - `@chat kitna bacha hai` → Overall available funds and balance check
+    - `@chat undo` → Reversal of last transaction
+
 - **🔒 Cryptographic Chat Pairing & Privacy Isolation**
   - Pairs via a secure 5-minute cryptographic single-use PIN sent between accounts.
   - Strictly filters by package (`com.whatsapp.w4b` / `com.whatsapp`) and verified conversation ID.
   - **Zero data retention for unrelated chats:** Messages from clients, family, or other contacts are immediately dropped without reading, storing, or logging.
   - Echo suppression prevents recursive bot reply loops.
 
-- **🤖 AI-First Intent Classification with Multi-Lingual Support**
-  - Powered by **Groq Cloud API** (supporting `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, etc.) for sub-second classification.
-  - Understands natural phrasing in **English, Roman Urdu, and Urdu**:
-    - *"petrol bharwaya 2200 ka"* → Fuel / Petrol (Rs. 2,200)
-    - *"chai 80 aur biscuit 50"* → Multi-expense batch extraction
-    - *"Qaisar ko udhaar 5000"* → Dynamic loan/lending category
-    - *"Gilgit mein total kharcha kitna hua"* → Geographic query
-    - *"kitna bacha hai"* → Remaining budget check
-  - **Strict JSON Schema Enforcement:** LLM only outputs structured commands; never generates financial calculations or writes directly to the database.
-  - **Android Keystore Security:** Groq API keys are encrypted at rest using hardware-backed Keystore AES-GCM.
+- **🤖 Unified Agent Pipeline & Reasoning Filter**
+  - Replaced legacy separate read-only chat managers with a unified, bounded tool-calling loop (max 3 iterations).
+  - Powered by **Groq Cloud API** (supporting `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, etc.) with seamless offline fallback.
+  - **Zero Reasoning Leaks:** Automatically strips `<think>`, `<thought>`, and internal monologue tags.
+  - Enforces strict JSON schemas and integer paisa arithmetic.
 
-- **📶 Resilient Offline Fallback Parser**
-  - When network connection drops on remote mountain passes or if no API key is configured, the built-in `LocalFallbackParser` seamlessly takes over using comprehensive regex and rule heuristics.
+- **💰 Real Cash-Flow Ledger & Authoritative Formula**
+  - Supports full transaction types: `EXPENSE`, `INCOME`, `GIFT_RECEIVED`, `GIFT_SENT`, `LOAN_GIVEN`, `LOAN_RECEIVED`, `LOAN_REPAYMENT_RECEIVED`, `LOAN_REPAYMENT_PAID`, `REFUND_RECEIVED`, `TRANSFER_IN`, `TRANSFER_OUT`, `ADJUSTMENT`.
+  - Authoritative balance calculation:
+    - **`Available funds = base budget + added funds - cash out`**
+    - **`Cash out = expense spending + gifts given + loans given + transfers out`**
+    - **`Added funds = income + gifts received + loans received + loan repayments received + refunds + transfers in`**
+  - Single authoritative base budget prevents discrepancies (fixes the 100k vs 50k bug).
 
-- **💬 Conversational Assistant Mode (`@chat`)**
-  - Prefix any message with `@chat` (e.g., *"@chat how much did I spend on food so far and is it within budget?"*) to consult your personal travel financial advisor powered by contextual ledger summaries.
+- **📍 Real-Time Location Freshness & Accurate Place Queries**
+  - Freshness evaluated using `elapsedRealtimeNanos` against device location fixes.
+  - Dashboard Current Location Card shows Town/City, Fix Age, Accuracy, Provider, and a 1-tap "Refresh Location" action.
+  - Fixes the legacy blind Islamabad backfill bug: if a city has no records, cleanly informs: `"Islamabad mein abhi koi recorded expense nahi hai."`.
+  - Distinguishes locality from district (e.g. Gilgit City vs. Gilgit District).
 
-- **📍 Device-Derived Location Context**
-  - Runs a foreground tracking service (`LocationTrackingService`) with persistent status notification.
-  - Accurately captures device coordinates at the exact timestamp an expense notification arrives.
-  - Asynchronous reverse geocoding via Android `Geocoder` with local cell caching.
-  - Disambiguates cities and districts (e.g., Gilgit City vs. Gilgit District).
-
-- **💰 Bulletproof Local Accounting**
-  - Stored in Room SQLite using strict integer math (`Long` paisa: `Rs. 2,200.50` = `220050` paisa) to eliminate IEEE-754 floating-point rounding errors.
-  - **Deterministic Confirmation Templates:** Balances, totals, and remaining amounts are calculated exclusively by SQL aggregate queries, never hallucinated by AI.
-  - Instant Undo support (`undo` / *"last expense wapas karo"*).
-  - Review Queue for ambiguous amounts or low-certainty messages.
-
-- **🎨 Modern Material 3 Android UI**
-  - Built with 100% Jetpack Compose.
-  - **Home Dashboard:** Balance card, spent vs. limit, tracking toggle, recent transactions.
-  - **Expenses Ledger:** Searchable, filterable by date, category, and locality.
-  - **Location Breakdown:** View itemized spending grouped by cities and valleys.
-  - **Review Queue:** Audit, approve, or discard pending and ambiguous items.
-  - **Diagnostics & Settings:** Live notification listener health, payload inspector, and model connectivity tests.
+- **🏷️ Comprehensive 24-Category Taxonomy**
+  - 24 main categories and 300+ hierarchical leaves with Roman Urdu and English aliases tailored for Northern Pakistan road trips (Transport, Fuel, Meals, Tea/Coffee, Motorcycle Maintenance, Repairs, Accessories, Charity/Sadqa, Lending/Udhaar, etc.).
 
 ---
 
@@ -82,34 +82,36 @@ flowchart TD
     E -->|Yes| D
     E -->|No| F{Check Pairing Status}
     F -->|In Pairing Mode| G[PairingManager: Verify PIN & Authorize]
-    F -->|Verified Paired Chat| H[Capture Location Snapshot at Candidate Time]
+    F -->|Verified Paired Chat| H{Message starts with @chat?}
     F -->|Unpaired / Other Contact| D
     
-    H --> I[Store InboxEvent in Room DB: DETECTED]
-    I --> J{Message starts with @chat?}
-    J -->|Yes| K[BudgetChatManager: Contextual LLM Chat]
-    J -->|No| L{Groq Online & Configured?}
+    H -->|No| D
+    H -->|Yes| I[Capture Location Snapshot & Enqueue to UnifiedBudgetAgent]
     
-    L -->|Yes| M[GroqClassifier: Structured JSON Intent]
-    L -->|No / Offline| N[LocalFallbackParser: Deterministic Regex]
+    I --> J{Bare @chat?}
+    J -->|Yes| K[Dispatch Interactive Usage Guide]
+    J -->|No| L{Groq Online & Key Configured?}
+    
+    L -->|Yes| M[Groq Classifier: Structured JSON Intent]
+    L -->|No / Offline| N[LocalFallbackParser: Regex & Cash-Flow Heuristics]
     
     M --> O{Action Type}
     N --> O
     
     O -->|IGNORE| P[Mark IGNORED - 0 Replies]
-    O -->|NEEDS_CONFIRMATION / Ambiguous| Q[Create Pending Proposal & Ask Confirmation]
-    O -->|ADD_EXPENSE| R[Atomic Multi-Expense DB Commit in Paisa]
-    O -->|QUERY_BUDGET| S[SQL Aggregate Query: Overall / Category / Place]
-    O -->|UNDO_EXPENSE| T[Reversal of Last Active Expense]
-    O -->|SET_BUDGET| U[Update Active Budget Target]
+    O -->|RECORD_TRANSACTION / ADD_EXPENSE| Q[Atomic Transaction DB Commit in Paisa]
+    O -->|QUERY_BUDGET| R[SQL Aggregate Query: Balance / Category / Place]
+    O -->|UNDO_EXPENSE| S[Reversal of Last Active Transaction]
+    O -->|SET_BUDGET| T[Atomically Replace Base Budget Target]
+    O -->|Conversational Inquiry| U[Grounded Agent with Ledger Facts & Think Filter]
     
-    R --> V[DeterministicReplyRenderer: Generate Fixed Template]
+    Q --> V[DeterministicReplyRenderer: Section 10 Receipt]
+    R --> V
     S --> V
     T --> V
-    U --> V
-    Q --> V
-    K --> W[RemoteInput Reply Executor]
+    U --> W[RemoteInput Reply Executor]
     V --> W
+    K --> W
     W --> X[Native WhatsApp Reply Sent!]
 ```
 

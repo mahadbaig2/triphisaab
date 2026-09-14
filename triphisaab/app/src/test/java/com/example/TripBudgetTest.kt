@@ -128,13 +128,73 @@ class TripBudgetTest {
         val res2 = LocalFallbackParser.parse("kal petrol ke liye 2000 rakhna")
         assertEquals("IGNORE", res2.action)
 
-        // Salary / income should be IGNORED
-        val res3 = LocalFallbackParser.parse("salary 100000 aa gayi")
-        assertEquals("IGNORE", res3.action)
-
         // URL / link should be IGNORED
         val res4 = LocalFallbackParser.parse("Check this road condition: https://maps.app.goo.gl/xyz")
         assertEquals("IGNORE", res4.action)
+    }
+
+    @Test
+    fun testUnifiedAgent_ChatTokenActivationGate() {
+        val agent = com.example.engine.UnifiedBudgetAgent(
+            context, db, ledgerRepository, settingsRepository,
+            com.example.location.TripLocationProvider(context, db.locationSnapshotDao(), db.placeDao())
+        )
+
+        // Valid activations
+        assertTrue(agent.isChatTokenActivated("@chat petrol 2200"))
+        assertTrue(agent.isChatTokenActivated("@CHAT petrol 2200"))
+        assertTrue(agent.isChatTokenActivated("  @chat   petroll - 2,200  "))
+        assertTrue(agent.isChatTokenActivated("@chat Islamabad ka total kharcha"))
+        assertTrue(agent.isChatTokenActivated("@chat bhai ne 5000 bhej diye"))
+        assertTrue(agent.isChatTokenActivated("@chat"))
+
+        // Unprefixed or invalid - MUST BE REJECTED
+        assertFalse(agent.isChatTokenActivated("petrol 2200"))
+        assertFalse(agent.isChatTokenActivated("Islamabad ka total kharcha"))
+        assertFalse(agent.isChatTokenActivated("bhai ne 5000 bhej diye"))
+        assertFalse(agent.isChatTokenActivated("hello @chat petrol 2200"))
+        assertFalse(agent.isChatTokenActivated("chat petrol 2200"))
+    }
+
+    @Test
+    fun testLocalFallbackParser_CashFlowTransactions() {
+        // Income: "bhai ne 5000 bhej diye"
+        val incRes = LocalFallbackParser.parse("bhai ne 5000 bhej diye")
+        assertEquals("RECORD_TRANSACTION", incRes.action)
+        val incItem = incRes.expenses?.first()
+        assertNotNull(incItem)
+        assertEquals("INCOME", incItem!!.type)
+        assertEquals("INCOMING", incItem.direction)
+        assertEquals("5000", incItem.amountDecimal)
+
+        // Loan Given: "Qaisar ko udhaar 5000 diya"
+        val loanRes = LocalFallbackParser.parse("Qaisar ko udhaar 5000 diya")
+        assertEquals("RECORD_TRANSACTION", loanRes.action)
+        val loanItem = loanRes.expenses?.first()
+        assertNotNull(loanItem)
+        assertEquals("LOAN_GIVEN", loanItem!!.type)
+        assertEquals("OUTGOING", loanItem.direction)
+        assertEquals("5000", loanItem.amountDecimal)
+        assertEquals("Qaisar", loanItem.counterparty)
+
+        // Loan Repayment Received: "Qaisar ne udhaar wapas kiya 5000"
+        val repayRes = LocalFallbackParser.parse("Qaisar ne udhaar wapas kiya 5000")
+        assertEquals("RECORD_TRANSACTION", repayRes.action)
+        val repayItem = repayRes.expenses?.first()
+        assertNotNull(repayItem)
+        assertEquals("LOAN_REPAYMENT_RECEIVED", repayItem!!.type)
+        assertEquals("INCOMING", repayItem.direction)
+        assertEquals("5000", repayItem.amountDecimal)
+        assertEquals("Qaisar", repayItem.counterparty)
+
+        // Refund: "hotel refund 1500 mila"
+        val refRes = LocalFallbackParser.parse("hotel refund 1500 mila")
+        assertEquals("RECORD_TRANSACTION", refRes.action)
+        val refItem = refRes.expenses?.first()
+        assertNotNull(refItem)
+        assertEquals("REFUND_RECEIVED", refItem!!.type)
+        assertEquals("INCOMING", refItem.direction)
+        assertEquals("1500", refItem.amountDecimal)
     }
 
     @Test
@@ -148,10 +208,15 @@ class TripBudgetTest {
         assertEquals("QUERY_BUDGET", q2.action)
         assertEquals("overall", q2.query?.scope)
 
+        val q3 = LocalFallbackParser.parse("Islamabad ka total kharcha")
+        assertEquals("QUERY_BUDGET", q3.action)
+        assertEquals("place", q3.query?.scope)
+        assertEquals("Islamabad", q3.query?.placeText)
+
         val u = LocalFallbackParser.parse("undo")
         assertEquals("UNDO_EXPENSE", u.action)
 
-        val b = LocalFallbackParser.parse("budget 50000")
+        val b = LocalFallbackParser.parse("set total budget to 50,000")
         assertEquals("SET_BUDGET", b.action)
         assertEquals("50000", b.budgetDecimal)
     }
@@ -182,9 +247,61 @@ class TripBudgetTest {
     }
 
     @Test
+    fun testLedger_CashFlowMathAndBudgetReplacement() = runBlocking {
+        // Base budget replaced to 50,000
+        ledgerRepository.setBudgetLimit(50000_00L)
+        val budget = db.budgetDao().getActiveBudgetOnce()
+        assertNotNull(budget)
+        assertEquals(50000_00L, budget!!.limitPaisa)
+
+        // Record Income: +5,000
+        val incomeTx = com.example.data.model.Transaction(
+            budgetId = budget.id,
+            type = "INCOME",
+            direction = "INCOMING",
+            amountPaisa = 5000_00L,
+            description = "Bhai se transfer",
+            counterparty = "Bhai"
+        )
+        ledgerRepository.recordTransactions(listOf(incomeTx))
+
+        // Record Expense: -2,200
+        val expenseTx = com.example.data.model.Transaction(
+            budgetId = budget.id,
+            type = "EXPENSE",
+            direction = "OUTGOING",
+            amountPaisa = 2200_00L,
+            description = "Petrol",
+            category = "Transport",
+            subcategory = "Fuel"
+        )
+        ledgerRepository.recordTransactions(listOf(expenseTx))
+
+        // Check balance state: Available = Base (50,000) + Added (5,000) - CashOut (2,200) = 52,800
+        val bal = ledgerRepository.getBalanceState()
+        assertEquals(50000_00L, bal.baseBudgetPaisa)
+        assertEquals(5000_00L, bal.addedFundsPaisa)
+        assertEquals(2200_00L, bal.cashOutPaisa)
+        assertEquals(2200_00L, bal.expenseSpendingPaisa)
+        assertEquals(52800_00L, bal.availableFundsPaisa)
+    }
+
+    @Test
+    fun testLedger_PlaceQueryAccurateAndEmpty() = runBlocking {
+        // Islamabad initially has no transactions in our clean seed
+        val isbQuery = ledgerRepository.queryByPlace("Islamabad")
+        assertNotNull(isbQuery)
+        assertEquals("Islamabad", isbQuery!!.canonicalPlaceName)
+        assertEquals(0L, isbQuery.totalSpentPaisa)
+        assertEquals(0, isbQuery.count)
+
+        // Reply renderer should return clean message
+        val reply = DeterministicReplyRenderer.renderPlaceQuery(isbQuery)
+        assertEquals("Islamabad mein abhi koi recorded expense nahi hai.", reply)
+    }
+
+    @Test
     fun testLedger_GilgitLocalityVsDistrictQueryIsolation() = runBlocking {
-        // PRD Section 4 & Acceptance Test 4:
-        // Expenses logged in Gilgit city locality must never be conflated with Gilgit District
         val cityPlace = ledgerRepository.resolvePlace("Gilgit")
         assertNotNull(cityPlace)
         assertEquals("LOCALITY", cityPlace!!.type)
@@ -354,16 +471,5 @@ class TripBudgetTest {
         val resLunch = LocalFallbackParser.parse("kal 1200 ka lunch kiya")
         assertEquals("ADD_EXPENSE", resLunch.action)
         assertEquals("1200", resLunch.expenses?.first()?.amountDecimal)
-    }
-
-    @Test
-    fun testBudgetChatManager_ReadOnlyFactInspection() = runBlocking {
-        val chatManager = com.example.engine.BudgetChatManager(
-            db,
-            settingsRepository
-        )
-
-        val res = chatManager.handleChat("@chat how much did I spend on petrol?")
-        assertTrue(res.contains("Trip Budget Assistant") || res.contains("Total Spent") || res.contains("Budget"))
     }
 }

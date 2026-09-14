@@ -8,6 +8,9 @@ data class ClassifierExpenseItem(
     val description: String,
     @Json(name = "amount_decimal") val amountDecimal: String,
     val currency: String = "PKR",
+    val type: String? = "EXPENSE",
+    val direction: String? = "OUTGOING",
+    val counterparty: String? = null,
     val category: String? = null,
     val subcategory: String? = null,
     @Json(name = "date_phrase") val datePhrase: String? = null,
@@ -17,9 +20,10 @@ data class ClassifierExpenseItem(
 
 @JsonClass(generateAdapter = true)
 data class ClassifierQuery(
-    val scope: String = "overall", // "overall", "today", "recent", "place", "remaining", "category"
+    val scope: String = "overall", // "overall", "today", "recent", "place", "remaining", "category", "counterparty"
     @Json(name = "place_text") val placeText: String? = null,
     @Json(name = "category_text") val categoryText: String? = null,
+    @Json(name = "counterparty_text") val counterpartyText: String? = null,
     @Json(name = "date_from") val dateFrom: String? = null,
     @Json(name = "date_to") val dateTo: String? = null,
     val page: Int = 1
@@ -35,7 +39,7 @@ data class ClassifierCorrection(
 @JsonClass(generateAdapter = true)
 data class ClassifierResponse(
     @Json(name = "schema_version") val schemaVersion: Int = 1,
-    val action: String, // IGNORE, ADD_EXPENSE, QUERY_BUDGET, SET_BUDGET, UNDO_EXPENSE, CORRECT_EXPENSE, NEEDS_CONFIRMATION
+    val action: String, // IGNORE, ADD_EXPENSE, RECORD_TRANSACTION, QUERY_BUDGET, SET_BUDGET, UNDO_EXPENSE, CORRECT_EXPENSE, NEEDS_CONFIRMATION
     val certainty: String = "clear", // "clear", "ambiguous"
     val expenses: List<ClassifierExpenseItem>? = null,
     val query: ClassifierQuery? = null,

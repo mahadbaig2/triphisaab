@@ -18,6 +18,7 @@ import java.util.UUID
         PairedConversation::class,
         InboxEvent::class,
         Expense::class,
+        Transaction::class,
         LocationSnapshot::class,
         Place::class,
         PendingProposal::class,
@@ -28,12 +29,13 @@ import java.util.UUID
         Subcategory::class,
         ChatTurn::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class TripBudgetDatabase : RoomDatabase() {
     abstract fun budgetDao(): BudgetDao
     abstract fun expenseDao(): ExpenseDao
+    abstract fun transactionDao(): TransactionDao
     abstract fun pairedConversationDao(): PairedConversationDao
     abstract fun inboxEventDao(): InboxEventDao
     abstract fun locationSnapshotDao(): LocationSnapshotDao
@@ -49,6 +51,72 @@ abstract class TripBudgetDatabase : RoomDatabase() {
     companion object {
         @Volatile
         private var INSTANCE: TripBudgetDatabase? = null
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Create transactions table
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `transactions` (
+                        `id` TEXT NOT NULL,
+                        `budgetId` TEXT NOT NULL,
+                        `sourceEventId` TEXT,
+                        `sourceLineIndex` INTEGER NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `direction` TEXT NOT NULL,
+                        `amountPaisa` INTEGER NOT NULL,
+                        `currency` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `category` TEXT,
+                        `subcategory` TEXT,
+                        `categoryId` TEXT,
+                        `subcategoryId` TEXT,
+                        `counterparty` TEXT,
+                        `linkedTransactionId` TEXT,
+                        `occurrenceTime` INTEGER NOT NULL,
+                        `loggedAt` INTEGER NOT NULL,
+                        `timeCertainty` TEXT NOT NULL,
+                        `timeSource` TEXT NOT NULL,
+                        `locationSnapshotId` TEXT,
+                        `effectivePlaceId` TEXT,
+                        `locationOverride` TEXT,
+                        `locationCertainty` TEXT NOT NULL,
+                        `messageTime` INTEGER,
+                        `status` TEXT NOT NULL,
+                        `reversedAt` INTEGER,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_budgetId_status` ON `transactions` (`budgetId`, `status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_direction_status` ON `transactions` (`direction`, `status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_type_status` ON `transactions` (`type`, `status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_effectivePlaceId` ON `transactions` (`effectivePlaceId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_occurrenceTime` ON `transactions` (`occurrenceTime`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_counterparty` ON `transactions` (`counterparty`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_categoryId` ON `transactions` (`categoryId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_transactions_sourceEventId_sourceLineIndex` ON `transactions` (`sourceEventId`, `sourceLineIndex`)")
+
+                // 2. Copy existing active and reversed expenses to transactions
+                db.execSQL("""
+                    INSERT OR IGNORE INTO `transactions` (
+                        `id`, `budgetId`, `sourceEventId`, `sourceLineIndex`,
+                        `type`, `direction`, `amountPaisa`, `currency`,
+                        `description`, `category`, `subcategory`, `categoryId`, `subcategoryId`,
+                        `counterparty`, `linkedTransactionId`, `occurrenceTime`, `loggedAt`,
+                        `timeCertainty`, `timeSource`, `locationSnapshotId`, `effectivePlaceId`,
+                        `locationOverride`, `locationCertainty`, `messageTime`, `status`, `reversedAt`
+                    )
+                    SELECT
+                        `id`, `budgetId`, `sourceEventId`, `sourceLineIndex`,
+                        'EXPENSE', 'OUTGOING', `amountPaisa`, `currency`,
+                        `description`, `category`, `subcategory`, `categoryId`, `subcategoryId`,
+                        NULL, NULL, `expenseTime`, `loggedAt`,
+                        `timeCertainty`, `timeSource`, `locationSnapshotId`, `effectivePlaceId`,
+                        `locationOverride`, `locationCertainty`, `messageTime`, `status`, `reversedAt`
+                    FROM `expenses`
+                """.trimIndent())
+            }
+        }
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -116,7 +184,7 @@ abstract class TripBudgetDatabase : RoomDatabase() {
                     TripBudgetDatabase::class.java,
                     "trip_budget.db"
                 )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
@@ -147,36 +215,26 @@ abstract class TripBudgetDatabase : RoomDatabase() {
                 db.execSQL("INSERT OR IGNORE INTO subcategories (id, categoryId, name, normalizedName, isDefault, createdAt) VALUES ('$id', '$catId', '$name', '$norm', 1, $now)")
             }
 
-            insertCat("cat_transport", "Transport", "transport")
-            insertSub("sub_fuel", "cat_transport", "Fuel", "fuel")
-            insertSub("sub_taxi", "cat_transport", "Taxi / Local Transport", "taxi / local transport")
-
-            insertCat("cat_accommodation", "Accommodation", "accommodation")
-
-            insertCat("cat_food", "Food & Drinks", "food & drinks")
-            insertSub("sub_meals", "cat_food", "Meals", "meals")
-            insertSub("sub_tea", "cat_food", "Tea / Coffee", "tea / coffee")
-            insertSub("sub_snacks", "cat_food", "Snacks", "snacks")
-
-            insertCat("cat_motorcycle", "Motorcycle", "motorcycle")
-            insertSub("sub_maint", "cat_motorcycle", "Maintenance", "maintenance")
-            insertSub("sub_repairs", "cat_motorcycle", "Repairs", "repairs")
-            insertSub("sub_acc", "cat_motorcycle", "Accessories", "accessories")
-
-            insertCat("cat_shopping", "Shopping", "shopping")
-            insertCat("cat_fees", "Fees & Permits", "fees & permits")
-            insertCat("cat_misc", "Miscellaneous", "miscellaneous")
+            for (cat in com.example.data.repository.TaxonomyData.CATEGORIES) {
+                insertCat(cat.id, cat.name, cat.normalizedName)
+                for (sub in cat.subcategories) {
+                    insertSub(sub.id, cat.id, sub.name, sub.normalizedName)
+                }
+            }
         }
 
         suspend fun seedInitialData(database: TripBudgetDatabase) {
-            // Seed active budget
-            val budget = Budget(
-                id = UUID.randomUUID().toString(),
-                name = "Motorcycle Trip",
-                currency = "PKR",
-                limitPaisa = 100000_00L // Default limit Rs. 100,000 (can be updated by user)
-            )
-            database.budgetDao().insertBudget(budget)
+            // Seed active budget if none exists
+            val existingBudget = database.budgetDao().getActiveBudgetOnce()
+            if (existingBudget == null) {
+                val budget = Budget(
+                    id = UUID.randomUUID().toString(),
+                    name = "Motorcycle Trip",
+                    currency = "PKR",
+                    limitPaisa = 100000_00L
+                )
+                database.budgetDao().insertBudget(budget)
+            }
 
             // Seed default settings
             database.settingsDao().insertOrUpdate(
@@ -188,28 +246,17 @@ abstract class TripBudgetDatabase : RoomDatabase() {
                 )
             )
 
-            // Seed Categories & Subcategories
-            val defaultCategories = listOf(
-                Category(id = "cat_transport", name = "Transport", normalizedName = "transport", isDefault = true),
-                Category(id = "cat_accommodation", name = "Accommodation", normalizedName = "accommodation", isDefault = true),
-                Category(id = "cat_food", name = "Food & Drinks", normalizedName = "food & drinks", isDefault = true),
-                Category(id = "cat_motorcycle", name = "Motorcycle", normalizedName = "motorcycle", isDefault = true),
-                Category(id = "cat_shopping", name = "Shopping", normalizedName = "shopping", isDefault = true),
-                Category(id = "cat_fees", name = "Fees & Permits", normalizedName = "fees & permits", isDefault = true),
-                Category(id = "cat_misc", name = "Miscellaneous", normalizedName = "miscellaneous", isDefault = true)
-            )
+            // Seed comprehensive 24 Categories & Subcategories
+            val defaultCategories = com.example.data.repository.TaxonomyData.CATEGORIES.map { cat ->
+                Category(id = cat.id, name = cat.name, normalizedName = cat.normalizedName, isDefault = true)
+            }
             database.categoryDao().insertCategories(defaultCategories)
 
-            val defaultSubcategories = listOf(
-                Subcategory(id = "sub_fuel", categoryId = "cat_transport", name = "Fuel", normalizedName = "fuel", isDefault = true),
-                Subcategory(id = "sub_taxi", categoryId = "cat_transport", name = "Taxi / Local Transport", normalizedName = "taxi / local transport", isDefault = true),
-                Subcategory(id = "sub_meals", categoryId = "cat_food", name = "Meals", normalizedName = "meals", isDefault = true),
-                Subcategory(id = "sub_tea", categoryId = "cat_food", name = "Tea / Coffee", normalizedName = "tea / coffee", isDefault = true),
-                Subcategory(id = "sub_snacks", categoryId = "cat_food", name = "Snacks", normalizedName = "snacks", isDefault = true),
-                Subcategory(id = "sub_maint", categoryId = "cat_motorcycle", name = "Maintenance", normalizedName = "maintenance", isDefault = true),
-                Subcategory(id = "sub_repairs", categoryId = "cat_motorcycle", name = "Repairs", normalizedName = "repairs", isDefault = true),
-                Subcategory(id = "sub_acc", categoryId = "cat_motorcycle", name = "Accessories", normalizedName = "accessories", isDefault = true)
-            )
+            val defaultSubcategories = com.example.data.repository.TaxonomyData.CATEGORIES.flatMap { cat ->
+                cat.subcategories.map { sub ->
+                    Subcategory(id = sub.id, categoryId = cat.id, name = sub.name, normalizedName = sub.normalizedName, isDefault = true)
+                }
+            }
             database.subcategoryDao().insertSubcategories(defaultSubcategories)
 
             // Seed known trip corridor places
@@ -243,46 +290,35 @@ abstract class TripBudgetDatabase : RoomDatabase() {
                 return
             }
 
-            // 2. Backfill any active expenses without effectivePlaceId
+            // 2. Ensure all taxonomy categories are seeded
+            val currentCats = database.categoryDao().getAllCategoriesList()
+            if (currentCats.size < com.example.data.repository.TaxonomyData.CATEGORIES.size) {
+                val cats = com.example.data.repository.TaxonomyData.CATEGORIES.map { cat ->
+                    Category(id = cat.id, name = cat.name, normalizedName = cat.normalizedName, isDefault = true)
+                }
+                database.categoryDao().insertCategories(cats)
+                val subs = com.example.data.repository.TaxonomyData.CATEGORIES.flatMap { cat ->
+                    cat.subcategories.map { sub ->
+                        Subcategory(id = sub.id, categoryId = cat.id, name = sub.name, normalizedName = sub.normalizedName, isDefault = true)
+                    }
+                }
+                database.subcategoryDao().insertSubcategories(subs)
+            }
+
+            // 3. Only attribute place if supported by coordinates or explicit override; DO NOT default to Islamabad
             val unplaced = database.expenseDao().getExpensesWithoutEffectivePlace()
             if (unplaced.isNotEmpty()) {
-                val isbPlace = currentPlaces.firstOrNull { it.canonicalName.equals("Islamabad", ignoreCase = true) }
                 for (exp in unplaced) {
                     val snapshot = exp.locationSnapshotId?.let { database.locationSnapshotDao().getSnapshotById(it) }
                     val locName = exp.locationOverride ?: snapshot?.locality ?: snapshot?.district
-                    val matchedPlace = if (!locName.isNullOrBlank()) {
-                        currentPlaces.firstOrNull {
+                    if (!locName.isNullOrBlank()) {
+                        val matchedPlace = currentPlaces.firstOrNull {
                             it.canonicalName.equals(locName, ignoreCase = true) ||
                             it.aliasesJson.contains("\"${locName.lowercase()}\"", ignoreCase = true)
-                        } ?: isbPlace
-                    } else {
-                        isbPlace
-                    }
-                    if (matchedPlace != null) {
-                        database.expenseDao().updateEffectivePlace(exp.id, matchedPlace.id)
-                    }
-                }
-            }
-
-            // 3. Re-classify any active expenses that defaulted to Miscellaneous or uncategorized
-            val miscExpenses = database.expenseDao().getMiscellaneousOrUncategorizedExpenses()
-            if (miscExpenses.isNotEmpty()) {
-                val allCats = database.categoryDao().getAllCategoriesList()
-                val allSubs = database.subcategoryDao().getAllSubcategoriesList()
-                for (exp in miscExpenses) {
-                    val match = com.example.data.repository.CategoryTaxonomyManager.detectFromKeywords(exp.description)
-                    if (match != null) {
-                        val catObj = allCats.firstOrNull { it.name.equals(match.categoryName, ignoreCase = true) }
-                        val subObj = if (match.subcategoryName != null) {
-                            allSubs.firstOrNull { it.name.equals(match.subcategoryName, ignoreCase = true) }
-                        } else null
-                        database.expenseDao().updateCategoryDetails(
-                            id = exp.id,
-                            categoryId = catObj?.id,
-                            category = match.categoryName,
-                            subcategoryId = subObj?.id,
-                            subcategory = match.subcategoryName
-                        )
+                        }
+                        if (matchedPlace != null) {
+                            database.expenseDao().updateEffectivePlace(exp.id, matchedPlace.id)
+                        }
                     }
                 }
             }

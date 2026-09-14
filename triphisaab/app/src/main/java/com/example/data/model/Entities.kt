@@ -95,6 +95,48 @@ data class Expense(
 )
 
 @Entity(
+    tableName = "transactions",
+    indices = [
+        Index(value = ["budgetId", "status"]),
+        Index(value = ["direction", "status"]),
+        Index(value = ["type", "status"]),
+        Index(value = ["effectivePlaceId"]),
+        Index(value = ["occurrenceTime"]),
+        Index(value = ["counterparty"]),
+        Index(value = ["categoryId"]),
+        Index(value = ["sourceEventId", "sourceLineIndex"], unique = true)
+    ]
+)
+data class Transaction(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val budgetId: String,
+    val sourceEventId: String? = null,
+    val sourceLineIndex: Int = 0,
+    val type: String = "EXPENSE", // EXPENSE, INCOME, GIFT_RECEIVED, GIFT_SENT, LOAN_GIVEN, LOAN_RECEIVED, LOAN_REPAYMENT_RECEIVED, LOAN_REPAYMENT_PAID, REFUND_RECEIVED, TRANSFER_IN, TRANSFER_OUT, ADJUSTMENT
+    val direction: String = "OUTGOING", // INCOMING, OUTGOING, NEUTRAL
+    val amountPaisa: Long,
+    val currency: String = "PKR",
+    val description: String,
+    val category: String? = null,
+    val subcategory: String? = null,
+    val categoryId: String? = null,
+    val subcategoryId: String? = null,
+    val counterparty: String? = null,
+    val linkedTransactionId: String? = null,
+    val occurrenceTime: Long = System.currentTimeMillis(),
+    val loggedAt: Long = System.currentTimeMillis(),
+    val timeCertainty: String = "EXACT", // EXACT, DATE_ONLY, UNCERTAIN
+    val timeSource: String = "MESSAGE_TIMESTAMP", // MESSAGE_TIMESTAMP, DETECTION_TIME, PARSED_RETROSPECTIVE, MANUAL_INPUT
+    val locationSnapshotId: String? = null,
+    val effectivePlaceId: String? = null,
+    val locationOverride: String? = null,
+    val locationCertainty: String = "DEVICE", // DEVICE, MANUAL, UNCERTAIN, UNAVAILABLE
+    val messageTime: Long? = null,
+    val status: String = "ACTIVE", // ACTIVE or REVERSED
+    val reversedAt: Long? = null
+)
+
+@Entity(
     tableName = "categories",
     indices = [
         Index(value = ["normalizedName"], unique = true)

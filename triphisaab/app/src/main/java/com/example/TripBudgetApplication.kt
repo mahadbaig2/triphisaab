@@ -29,6 +29,8 @@ class TripBudgetApplication : Application() {
         private set
     lateinit var budgetEngine: BudgetProcessingEngine
         private set
+    lateinit var unifiedAgent: UnifiedBudgetAgent
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +42,7 @@ class TripBudgetApplication : Application() {
         locationProvider = TripLocationProvider(this, database.locationSnapshotDao(), database.placeDao())
         pairingManager = PairingManager(this, database.pairedConversationDao(), settingsRepository)
         budgetEngine = BudgetProcessingEngine(this, database, ledgerRepository, settingsRepository, locationProvider)
+        unifiedAgent = com.example.engine.UnifiedBudgetAgent(this, database, ledgerRepository, settingsRepository, locationProvider)
 
         createNotificationChannels()
     }

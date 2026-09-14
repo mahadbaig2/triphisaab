@@ -57,6 +57,12 @@ fun HomeScreen(
     val appSettings by viewModel.appSettings.collectAsState()
     val pendingReviewCount by viewModel.pendingReviewCount.collectAsState()
 
+    val addedFunds by viewModel.addedFunds.collectAsState()
+    val cashOut by viewModel.cashOut.collectAsState()
+    val expenseSpending by viewModel.expenseSpending.collectAsState()
+    val latestLocation by viewModel.latestLocationSnapshot.collectAsState()
+    val isRefreshingLocation by viewModel.isRefreshingLocation.collectAsState()
+
     var showManualAddDialog by remember { mutableStateOf(false) }
     var showSetBudgetDialog by remember { mutableStateOf(false) }
 
@@ -76,10 +82,12 @@ fun HomeScreen(
 
     val totalSpentPaisa = totalSpent ?: 0L
     val limitPaisa = budget?.limitPaisa
-    val remainingPaisa = limitPaisa?.let { it - totalSpentPaisa }
-    val isOverBudget = remainingPaisa != null && remainingPaisa < 0
+    val addedFundsPaisa = addedFunds ?: 0L
+    val cashOutPaisa = if (cashOut != null && cashOut!! > 0L) cashOut!! else totalSpentPaisa
+    val availableFundsPaisa = limitPaisa?.let { it + addedFundsPaisa - cashOutPaisa }
+    val isOverBudget = availableFundsPaisa != null && availableFundsPaisa < 0
     val progressRatio = if (limitPaisa != null && limitPaisa > 0) {
-        (totalSpentPaisa.toFloat() / limitPaisa.toFloat()).coerceIn(0f, 1f)
+        (cashOutPaisa.toFloat() / (limitPaisa + addedFundsPaisa).toFloat()).coerceIn(0f, 1f)
     } else 0f
 
     Scaffold(
@@ -146,7 +154,7 @@ fun HomeScreen(
                 }
             }
 
-            // PRIMARY BALANCE CARD
+            // PRIMARY CASH-FLOW & BUDGET CARD
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -160,7 +168,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "TOTAL EXPENSES",
+                                text = "AVAILABLE FUNDS",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -173,15 +181,15 @@ fun HomeScreen(
                         Spacer(Modifier.height(4.dp))
 
                         Text(
-                            text = MoneyFormatter.formatPaisa(totalSpentPaisa),
+                            text = availableFundsPaisa?.let { MoneyFormatter.formatPaisa(it) } ?: MoneyFormatter.formatPaisa(-cashOutPaisa),
                             style = MaterialTheme.typography.headlineLarge,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (isOverBudget) AlertRed else MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         Spacer(Modifier.height(12.dp))
 
-                        // Progress bar towards budget limit
+                        // Progress bar towards total pool
                         LinearProgressIndicator(
                             progress = { progressRatio },
                             modifier = Modifier
@@ -192,32 +200,125 @@ fun HomeScreen(
                             trackColor = MaterialTheme.colorScheme.surface
                         )
 
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(14.dp))
 
+                        // Real Cash-Flow formula breakdown: Available = Base + Added - CashOut
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column {
-                                Text("Trip Budget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                Text("Base Budget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                                 Text(
                                     text = limitPaisa?.let { MoneyFormatter.formatPaisa(it) } ?: "Not set",
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(if (isOverBudget) "Over Budget" else "Remaining", style = MaterialTheme.typography.labelSmall, color = if (isOverBudget) AlertRed else MaterialTheme.colorScheme.outline)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Added Funds", style = MaterialTheme.typography.labelSmall, color = ExpenseGreen)
                                 Text(
-                                    text = when {
-                                        limitPaisa == null -> "—"
-                                        isOverBudget -> "-${MoneyFormatter.formatPaisa(Math.abs(remainingPaisa ?: 0L))}"
-                                        else -> MoneyFormatter.formatPaisa(remainingPaisa ?: 0L)
-                                    },
+                                    text = "+${MoneyFormatter.formatPaisa(addedFundsPaisa)}",
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isOverBudget) AlertRed else ExpenseGreen
+                                    color = ExpenseGreen
                                 )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("Cash Out", style = MaterialTheme.typography.labelSmall, color = AlertRed)
+                                Text(
+                                    text = "-${MoneyFormatter.formatPaisa(cashOutPaisa)}",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AlertRed
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // DASHBOARD CURRENT LOCATION CARD
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    border = CardDefaults.outlinedCardBorder()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.MyLocation,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text("Current Location", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                    val townText = latestLocation?.locality ?: "Islamabad (Default)"
+                                    Text(townText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                                }
+                            }
+
+                            Button(
+                                onClick = { viewModel.refreshLocation() },
+                                enabled = !isRefreshingLocation,
+                                modifier = Modifier.testTag("btn_refresh_location")
+                            ) {
+                                if (isRefreshingLocation) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Refresh")
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("Fix Age", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                val ageText = latestLocation?.let {
+                                    val sec = (System.currentTimeMillis() - it.fixEpochTime) / 1000
+                                    if (sec < 60) "${sec}s ago" else "${sec / 60}m ago"
+                                } ?: "Cached"
+                                Text(ageText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column {
+                                Text("Accuracy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                val accText = latestLocation?.accuracyMeters?.let { "±%.0fm".format(it) } ?: "±15m"
+                                Text(accText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column {
+                                Text("Provider", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                val provText = latestLocation?.provider ?: (if (isTracking) "GPS" else "Fused")
+                                Text(provText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column {
+                                Text("Status", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                val statusText = latestLocation?.qualityStatus ?: "APPROXIMATE"
+                                Text(statusText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = if (statusText == "FRESH") ExpenseGreen else MaterialTheme.colorScheme.primary)
                             }
                         }
                     }

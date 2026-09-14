@@ -15,63 +15,89 @@ class LedgerRepository(
     val categoryTaxonomyManager = CategoryTaxonomyManager(database.categoryDao(), database.subcategoryDao())
 
     val activeBudgetFlow: Flow<Budget?> = database.budgetDao().getActiveBudget()
-    val allActiveExpensesFlow: Flow<List<Expense>> = database.expenseDao().getAllActiveExpenses()
-    val recentExpensesFlow: Flow<List<Expense>> = database.expenseDao().getRecentExpenses(10)
-    val totalSpentFlow: Flow<Long?> = database.expenseDao().getTotalSpentActive()
+    val allActiveTransactionsFlow: Flow<List<Transaction>> = database.transactionDao().getAllActiveTransactions()
+    val recentTransactionsFlow: Flow<List<Transaction>> = database.transactionDao().getRecentTransactions(10)
+    val addedFundsFlow: Flow<Long?> = database.transactionDao().getAddedFundsActive()
+    val cashOutFlow: Flow<Long?> = database.transactionDao().getCashOutActive()
+    val expenseSpendingFlow: Flow<Long?> = database.transactionDao().getExpenseSpendingActive()
     val allPlacesFlow: Flow<List<Place>> = database.placeDao().getAllPlaces()
     val allCategoriesFlow: Flow<List<Category>> = database.categoryDao().getAllCategories()
     val reviewEventsFlow: Flow<List<InboxEvent>> = database.inboxEventDao().getReviewEvents()
     val pendingReviewCountFlow: Flow<Int> = database.inboxEventDao().countPendingReview()
 
-    data class CommitResult(
-        val committedExpenses: List<Expense>,
-        val batchTotalPaisa: Long,
-        val overallTotalSpentPaisa: Long,
-        val budgetLimitPaisa: Long?,
-        val remainingPaisa: Long?,
-        val isOverBudget: Boolean
+    // Backwards compatibility flows
+    val allActiveExpensesFlow: Flow<List<Expense>> = database.expenseDao().getAllActiveExpenses()
+    val recentExpensesFlow: Flow<List<Expense>> = database.expenseDao().getRecentExpenses(10)
+    val totalSpentFlow: Flow<Long?> = database.expenseDao().getTotalSpentActive()
+
+    data class BalanceState(
+        val baseBudgetPaisa: Long?,
+        val addedFundsPaisa: Long,
+        val cashOutPaisa: Long,
+        val availableFundsPaisa: Long?,
+        val expenseSpendingPaisa: Long
     )
 
-    data class UndoResult(
-        val reversedExpenses: List<Expense>,
+    data class CommitTransactionResult(
+        val committedTransactions: List<Transaction>,
+        val batchTotalPaisa: Long,
+        val balanceState: BalanceState
+    )
+
+    data class UndoTransactionResult(
+        val reversedTransactions: List<Transaction>,
         val reversedTotalPaisa: Long,
-        val newOverallTotalSpentPaisa: Long,
-        val budgetLimitPaisa: Long?,
-        val remainingPaisa: Long?
+        val balanceState: BalanceState
     )
 
     data class PlaceQueryResult(
         val placeName: String,
         val isDistrict: Boolean,
         val totalSpentPaisa: Long,
+        val incomingPaisa: Long,
         val count: Int,
         val page: Int,
         val totalPages: Int,
-        val expenses: List<Expense>,
-        val hasMore: Boolean
+        val transactions: List<Transaction>,
+        val categoryBreakdown: Map<String, Long>,
+        val dateRange: String?,
+        val hasRecords: Boolean
     )
 
-    data class GeneralQueryResult(
-        val scope: String, // "overall", "today", "recent", "remaining", "category"
-        val totalSpentPaisa: Long,
-        val count: Int,
-        val budgetLimitPaisa: Long?,
-        val remainingPaisa: Long?,
-        val isOverBudget: Boolean,
-        val expenses: List<Expense>
+    data class CounterpartySummary(
+        val name: String,
+        val outstandingReceivablePaisa: Long,
+        val transactions: List<Transaction>
     )
 
-    suspend fun recordExpenses(
-        expenses: List<Expense>,
+    suspend fun getBalanceState(): BalanceState {
+        val budget = database.budgetDao().getActiveBudgetOnce()
+        val baseBudget = budget?.limitPaisa
+        val added = database.transactionDao().getAddedFundsActiveOnce() ?: 0L
+        val cashOut = database.transactionDao().getCashOutActiveOnce() ?: 0L
+        val available = baseBudget?.let { it + added - cashOut }
+        val expenseSpending = database.transactionDao().getExpenseSpendingActiveOnce() ?: 0L
+
+        return BalanceState(
+            baseBudgetPaisa = baseBudget,
+            addedFundsPaisa = added,
+            cashOutPaisa = cashOut,
+            availableFundsPaisa = available,
+            expenseSpendingPaisa = expenseSpending
+        )
+    }
+
+    suspend fun recordTransactions(
+        transactions: List<Transaction>,
         sourceEventId: String? = null,
         origin: String = "VALIDATED_AI"
-    ): CommitResult {
-        require(expenses.isNotEmpty()) { "Cannot commit empty expense list" }
+    ): CommitTransactionResult {
+        require(transactions.isNotEmpty()) { "Cannot commit empty transaction list" }
 
-        // Resolve taxonomy for each expense
-        val resolvedExpenses = expenses.map { exp ->
-            val resolved = categoryTaxonomyManager.resolve(exp.description, exp.category, exp.subcategory)
-            exp.copy(
+        // Resolve category taxonomy for each transaction
+        val resolvedTransactions = transactions.map { tx ->
+            val resolved = categoryTaxonomyManager.resolve(tx.description, tx.category, tx.subcategory)
+            tx.copy(
                 categoryId = resolved.categoryId,
                 category = resolved.categoryName,
                 subcategoryId = resolved.subcategoryId,
@@ -86,8 +112,8 @@ class LedgerRepository(
                 }
 
             val budgetId = budget.id
-            val preparedExpenses = resolvedExpenses.mapIndexed { index, exp ->
-                exp.copy(
+            val prepared = resolvedTransactions.mapIndexed { index, tx ->
+                tx.copy(
                     budgetId = budgetId,
                     sourceEventId = sourceEventId,
                     sourceLineIndex = index,
@@ -95,73 +121,94 @@ class LedgerRepository(
                 )
             }
 
-            database.expenseDao().insertExpenses(preparedExpenses)
+            database.transactionDao().insertTransactions(prepared)
 
-            val batchTotalPaisa = preparedExpenses.sumOf { it.amountPaisa }
-            val overallTotal = database.expenseDao().getTotalSpentActiveOnce() ?: batchTotalPaisa
-            val limit = budget.limitPaisa
-            val remaining = limit?.let { it - overallTotal }
-            val isOverBudget = remaining != null && remaining < 0
+            // Also mirror EXPENSE records into expenses table for backward-compatible views
+            val expenseMirror = prepared.filter { it.type == "EXPENSE" }.map { tx ->
+                Expense(
+                    id = tx.id,
+                    budgetId = tx.budgetId,
+                    sourceEventId = tx.sourceEventId,
+                    sourceLineIndex = tx.sourceLineIndex,
+                    amountPaisa = tx.amountPaisa,
+                    currency = tx.currency,
+                    description = tx.description,
+                    category = tx.category,
+                    subcategory = tx.subcategory,
+                    categoryId = tx.categoryId,
+                    subcategoryId = tx.subcategoryId,
+                    expenseTime = tx.occurrenceTime,
+                    loggedAt = tx.loggedAt,
+                    timeCertainty = tx.timeCertainty,
+                    timeSource = tx.timeSource,
+                    locationSnapshotId = tx.locationSnapshotId,
+                    effectivePlaceId = tx.effectivePlaceId,
+                    locationOverride = tx.locationOverride,
+                    locationCertainty = tx.locationCertainty,
+                    messageTime = tx.messageTime,
+                    status = tx.status,
+                    reversedAt = tx.reversedAt
+                )
+            }
+            if (expenseMirror.isNotEmpty()) {
+                database.expenseDao().insertExpenses(expenseMirror)
+            }
+
+            val batchTotal = prepared.sumOf { it.amountPaisa }
+            val balance = getBalanceState()
 
             // Audit
             database.auditDao().insert(
                 AuditEntry(
-                    actionType = "RECORD_EXPENSES",
-                    entityId = sourceEventId ?: preparedExpenses.first().id,
-                    afterJson = "count=${preparedExpenses.size}, batchTotal=$batchTotalPaisa, overall=$overallTotal",
+                    actionType = "RECORD_TRANSACTIONS",
+                    entityId = sourceEventId ?: prepared.first().id,
+                    afterJson = "count=${prepared.size}, batchTotal=$batchTotal, types=${prepared.map { it.type }}",
                     origin = origin
                 )
             )
 
-            CommitResult(
-                committedExpenses = preparedExpenses,
-                batchTotalPaisa = batchTotalPaisa,
-                overallTotalSpentPaisa = overallTotal,
-                budgetLimitPaisa = limit,
-                remainingPaisa = remaining,
-                isOverBudget = isOverBudget
+            CommitTransactionResult(
+                committedTransactions = prepared,
+                batchTotalPaisa = batchTotal,
+                balanceState = balance
             )
         }
     }
 
-    suspend fun undoLastExpense(): UndoResult? {
+    suspend fun undoLastTransaction(): UndoTransactionResult? {
         return database.withTransaction {
-            val lastExpense = database.expenseDao().getLastActiveExpense() ?: return@withTransaction null
+            val lastTx = database.transactionDao().getLastActiveTransaction() ?: return@withTransaction null
 
-            val affectedExpenses = if (lastExpense.sourceEventId != null) {
-                database.expenseDao().getExpensesForEvent(lastExpense.sourceEventId)
+            val affected = if (lastTx.sourceEventId != null) {
+                database.transactionDao().getTransactionsForEvent(lastTx.sourceEventId)
                     .filter { it.status == "ACTIVE" }
             } else {
-                listOf(lastExpense)
+                listOf(lastTx)
             }
 
             val timestamp = System.currentTimeMillis()
-            affectedExpenses.forEach {
+            affected.forEach {
+                database.transactionDao().reverseTransaction(it.id, timestamp)
                 database.expenseDao().reverseExpense(it.id, timestamp)
             }
 
-            val reversedTotal = affectedExpenses.sumOf { it.amountPaisa }
-            val newOverallTotal = database.expenseDao().getTotalSpentActiveOnce() ?: 0L
-            val budget = database.budgetDao().getActiveBudgetOnce()
-            val limit = budget?.limitPaisa
-            val remaining = limit?.let { it - newOverallTotal }
+            val reversedTotal = affected.sumOf { it.amountPaisa }
+            val balance = getBalanceState()
 
             database.auditDao().insert(
                 AuditEntry(
-                    actionType = "UNDO_EXPENSE",
-                    entityId = lastExpense.sourceEventId ?: lastExpense.id,
-                    beforeJson = "reversedCount=${affectedExpenses.size}, amount=$reversedTotal",
-                    afterJson = "newOverallTotal=$newOverallTotal",
+                    actionType = "UNDO_TRANSACTION",
+                    entityId = lastTx.sourceEventId ?: lastTx.id,
+                    beforeJson = "reversedCount=${affected.size}, amount=$reversedTotal",
+                    afterJson = "availableFunds=${balance.availableFundsPaisa}",
                     origin = "USER"
                 )
             )
 
-            UndoResult(
-                reversedExpenses = affectedExpenses,
+            UndoTransactionResult(
+                reversedTransactions = affected,
                 reversedTotalPaisa = reversedTotal,
-                newOverallTotalSpentPaisa = newOverallTotal,
-                budgetLimitPaisa = limit,
-                remainingPaisa = remaining
+                balanceState = balance
             )
         }
     }
@@ -177,12 +224,12 @@ class LedgerRepository(
         // 2. Alias match
         for (place in allPlaces) {
             val aliases = place.aliasesJson.lowercase(Locale.ROOT)
-            if (aliases.contains("\"$clean\"")) {
+            if (aliases.contains("\"$clean\"") || (clean == "isb" && place.canonicalName.equals("Islamabad", true)) || (clean == "pindi" && place.canonicalName.equals("Rawalpindi", true))) {
                 return place
             }
         }
 
-        // 3. Fallback check: if user asked "Gilgit" specifically, never conflate with "Gilgit District"
+        // 3. Locality vs District distinction
         if (clean == "gilgit" || clean == "gilgit city") {
             return allPlaces.firstOrNull { it.canonicalName == "Gilgit" && it.type == "LOCALITY" }
         }
@@ -193,95 +240,85 @@ class LedgerRepository(
         return null
     }
 
-    suspend fun queryByPlace(placeText: String, page: Int = 1, pageSize: Int = 15): PlaceQueryResult? {
-        val resolvedPlace = resolvePlace(placeText) ?: return null
-        val placeId = resolvedPlace.id
-        val placeName = resolvedPlace.canonicalName
-        val totalSpent = database.expenseDao().getTotalSpentActiveByPlace(placeId, placeName) ?: 0L
-        val count = database.expenseDao().countActiveExpensesByPlace(placeId, placeName)
+    suspend fun queryByPlace(placeText: String, page: Int = 1, pageSize: Int = 15): PlaceQueryResult {
+        val resolvedPlace = resolvePlace(placeText)
+        val placeName = resolvedPlace?.canonicalName ?: placeText.trim().replaceFirstChar { it.uppercase() }
+        val placeId = resolvedPlace?.id ?: ""
+        val isDistrict = resolvedPlace?.type == "DISTRICT"
+
+        val totalSpent = database.transactionDao().getTotalSpentActiveByPlace(placeId, placeName) ?: 0L
+        val incoming = database.transactionDao().getIncomingActiveByPlace(placeId, placeName) ?: 0L
+        val count = database.transactionDao().countActiveTransactionsByPlace(placeId, placeName)
+
+        if (count == 0 && totalSpent == 0L && incoming == 0L) {
+            return PlaceQueryResult(
+                placeName = placeName,
+                isDistrict = isDistrict,
+                totalSpentPaisa = 0L,
+                incomingPaisa = 0L,
+                count = 0,
+                page = 1,
+                totalPages = 1,
+                transactions = emptyList(),
+                categoryBreakdown = emptyMap(),
+                dateRange = null,
+                hasRecords = false
+            )
+        }
+
         val offset = (page - 1) * pageSize
-        val pagedExpenses = database.expenseDao().getExpensesByPlacePaged(placeId, placeName, pageSize, offset)
+        val pagedTransactions = database.transactionDao().getTransactionsByPlacePaged(placeId, placeName, pageSize, offset)
+        val allPlaceTransactions = database.transactionDao().getTransactionsByPlaceAll(placeId, placeName)
         val totalPages = if (count == 0) 1 else ((count + pageSize - 1) / pageSize)
 
+        // Category breakdown
+        val catBreakdown = mutableMapOf<String, Long>()
+        allPlaceTransactions.filter { it.direction == "OUTGOING" }.forEach { tx ->
+            val cat = tx.category ?: "Miscellaneous"
+            catBreakdown[cat] = (catBreakdown[cat] ?: 0L) + tx.amountPaisa
+        }
+
+        // Date range
+        val dateRange = if (allPlaceTransactions.isNotEmpty()) {
+            val minTime = allPlaceTransactions.minOf { it.occurrenceTime }
+            val maxTime = allPlaceTransactions.maxOf { it.occurrenceTime }
+            val sdf = SimpleDateFormat("d MMM", Locale.getDefault())
+            if (minTime == maxTime) sdf.format(Date(minTime))
+            else "${sdf.format(Date(minTime))} – ${sdf.format(Date(maxTime))}"
+        } else null
+
         return PlaceQueryResult(
-            placeName = resolvedPlace.canonicalName,
-            isDistrict = resolvedPlace.type == "DISTRICT",
+            placeName = placeName,
+            isDistrict = isDistrict,
             totalSpentPaisa = totalSpent,
+            incomingPaisa = incoming,
             count = count,
             page = page,
             totalPages = totalPages,
-            expenses = pagedExpenses,
-            hasMore = page < totalPages
+            transactions = pagedTransactions,
+            categoryBreakdown = catBreakdown,
+            dateRange = dateRange,
+            hasRecords = true
         )
     }
 
-    suspend fun queryGeneral(scope: String, categoryName: String? = null): GeneralQueryResult {
-        val budget = database.budgetDao().getActiveBudgetOnce()
-        val limit = budget?.limitPaisa
-
-        val tz = TimeZone.getTimeZone("Asia/Karachi")
-        val cal = Calendar.getInstance(tz)
-
-        val expenses: List<Expense>
-        val totalSpent: Long
-
-        when (scope.lowercase(Locale.ROOT)) {
-            "today" -> {
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0)
-                cal.set(Calendar.MILLISECOND, 0)
-                val startOfDay = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23)
-                cal.set(Calendar.MINUTE, 59)
-                cal.set(Calendar.SECOND, 59)
-                cal.set(Calendar.MILLISECOND, 999)
-                val endOfDay = cal.timeInMillis
-
-                val list = database.expenseDao().getExpensesBetween(startOfDay, endOfDay)
-                if (categoryName != null) {
-                    val filtered = list.filter { it.category?.contains(categoryName, ignoreCase = true) == true }
-                    totalSpent = filtered.sumOf { it.amountPaisa }
-                    expenses = filtered
-                } else {
-                    totalSpent = database.expenseDao().getTotalSpentActiveBetween(startOfDay, endOfDay) ?: 0L
-                    expenses = list
-                }
-            }
-            "category" -> {
-                val targetCat = categoryName ?: "Miscellaneous"
-                val list = database.expenseDao().getAllExpensesList().filter {
-                    it.status == "ACTIVE" && (it.category?.contains(targetCat, ignoreCase = true) == true || targetCat.contains(it.category ?: "", ignoreCase = true))
-                }
-                totalSpent = list.sumOf { it.amountPaisa }
-                expenses = list
-            }
-            else -> { // overall, recent, remaining
-                totalSpent = database.expenseDao().getTotalSpentActiveOnce() ?: 0L
-                expenses = database.expenseDao().getAllExpensesList().filter { it.status == "ACTIVE" }.take(15)
-            }
-        }
-
-        val remaining = limit?.let { it - totalSpent }
-        val isOverBudget = remaining != null && remaining < 0
-
-        return GeneralQueryResult(
-            scope = scope,
-            totalSpentPaisa = totalSpent,
-            count = expenses.size,
-            budgetLimitPaisa = limit,
-            remainingPaisa = remaining,
-            isOverBudget = isOverBudget,
-            expenses = expenses
+    suspend fun getCounterpartySummary(name: String): CounterpartySummary {
+        val clean = name.trim()
+        val outstanding = database.transactionDao().getOutstandingLoanReceivable(clean) ?: 0L
+        val txs = database.transactionDao().getTransactionsByCounterparty(clean)
+        return CounterpartySummary(
+            name = clean,
+            outstandingReceivablePaisa = outstanding,
+            transactions = txs
         )
     }
 
-    suspend fun setBudgetLimit(limitPaisa: Long?) {
+    suspend fun setBudgetLimit(limitPaisa: Long?): BalanceState {
         val budget = database.budgetDao().getActiveBudgetOnce()
             ?: Budget(name = "Motorcycle Trip", currency = "PKR").also {
                 database.budgetDao().insertBudget(it)
             }
-        database.budgetDao().updateLimit(budget.id, limitPaisa)
+        database.budgetDao().updateLimit(budget.id, limitPaisa, System.currentTimeMillis())
         database.auditDao().insert(
             AuditEntry(
                 actionType = "SET_BUDGET",
@@ -290,40 +327,6 @@ class LedgerRepository(
                 origin = "USER"
             )
         )
-    }
-
-    suspend fun correctExpense(
-        expenseId: String,
-        newDescription: String? = null,
-        newAmountPaisa: Long? = null,
-        newPlaceId: String? = null,
-        newCategory: String? = null,
-        newSubcategory: String? = null
-    ): Boolean {
-        val current = database.expenseDao().getExpenseById(expenseId) ?: return false
-        val resolvedCat = if (newCategory != null) {
-            categoryTaxonomyManager.resolve(newDescription ?: current.description, newCategory, newSubcategory ?: current.subcategory)
-        } else null
-
-        val updated = current.copy(
-            description = newDescription ?: current.description,
-            amountPaisa = newAmountPaisa ?: current.amountPaisa,
-            effectivePlaceId = newPlaceId ?: current.effectivePlaceId,
-            categoryId = resolvedCat?.categoryId ?: current.categoryId,
-            category = resolvedCat?.categoryName ?: current.category,
-            subcategoryId = resolvedCat?.subcategoryId ?: current.subcategoryId,
-            subcategory = resolvedCat?.subcategoryName ?: current.subcategory
-        )
-        database.expenseDao().updateExpense(updated)
-        database.auditDao().insert(
-            AuditEntry(
-                actionType = "CORRECT_EXPENSE",
-                entityId = expenseId,
-                beforeJson = "desc=${current.description}, amount=${current.amountPaisa}, cat=${current.category}",
-                afterJson = "desc=${updated.description}, amount=${updated.amountPaisa}, cat=${updated.category}",
-                origin = "USER"
-            )
-        )
-        return true
+        return getBalanceState()
     }
 }

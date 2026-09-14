@@ -318,3 +318,90 @@ interface SettingsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(settings: AppSettings)
 }
+
+@Dao
+interface TransactionDao {
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' ORDER BY occurrenceTime DESC, loggedAt DESC")
+    fun getAllActiveTransactions(): Flow<List<Transaction>>
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' ORDER BY occurrenceTime DESC, loggedAt DESC LIMIT :limit")
+    fun getRecentTransactions(limit: Int = 10): Flow<List<Transaction>>
+
+    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    suspend fun getTransactionById(id: String): Transaction?
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' ORDER BY loggedAt DESC LIMIT 1")
+    suspend fun getLastActiveTransaction(): Transaction?
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'INCOMING'")
+    fun getAddedFundsActive(): Flow<Long?>
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'INCOMING'")
+    suspend fun getAddedFundsActiveOnce(): Long?
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'OUTGOING'")
+    fun getCashOutActive(): Flow<Long?>
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'OUTGOING'")
+    suspend fun getCashOutActiveOnce(): Long?
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND type = 'EXPENSE'")
+    fun getExpenseSpendingActive(): Flow<Long?>
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND type = 'EXPENSE'")
+    suspend fun getExpenseSpendingActiveOnce(): Long?
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' AND occurrenceTime >= :startTime AND occurrenceTime <= :endTime ORDER BY occurrenceTime DESC")
+    suspend fun getTransactionsBetween(startTime: Long, endTime: Long): List<Transaction>
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'OUTGOING' AND (effectivePlaceId = :placeId OR LOWER(locationOverride) = LOWER(:placeName))")
+    suspend fun getTotalSpentActiveByPlace(placeId: String, placeName: String): Long?
+
+    @Query("SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND direction = 'INCOMING' AND (effectivePlaceId = :placeId OR LOWER(locationOverride) = LOWER(:placeName))")
+    suspend fun getIncomingActiveByPlace(placeId: String, placeName: String): Long?
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE status = 'ACTIVE' AND (effectivePlaceId = :placeId OR LOWER(locationOverride) = LOWER(:placeName))")
+    suspend fun countActiveTransactionsByPlace(placeId: String, placeName: String): Int
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' AND (effectivePlaceId = :placeId OR LOWER(locationOverride) = LOWER(:placeName)) ORDER BY occurrenceTime DESC LIMIT :limit OFFSET :offset")
+    suspend fun getTransactionsByPlacePaged(placeId: String, placeName: String, limit: Int, offset: Int): List<Transaction>
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' AND (effectivePlaceId = :placeId OR LOWER(locationOverride) = LOWER(:placeName)) ORDER BY occurrenceTime DESC")
+    suspend fun getTransactionsByPlaceAll(placeId: String, placeName: String): List<Transaction>
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' AND LOWER(counterparty) = LOWER(:name) ORDER BY occurrenceTime DESC")
+    suspend fun getTransactionsByCounterparty(name: String): List<Transaction>
+
+    @Query("SELECT (COALESCE((SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND type = 'LOAN_GIVEN' AND LOWER(counterparty) = LOWER(:name)), 0) - COALESCE((SELECT SUM(amountPaisa) FROM transactions WHERE status = 'ACTIVE' AND type = 'LOAN_REPAYMENT_RECEIVED' AND LOWER(counterparty) = LOWER(:name)), 0))")
+    suspend fun getOutstandingLoanReceivable(name: String): Long?
+
+    @Query("SELECT category, SUM(amountPaisa) as totalPaisa, COUNT(*) as count FROM transactions WHERE status = 'ACTIVE' AND direction = 'OUTGOING' GROUP BY category ORDER BY totalPaisa DESC")
+    suspend fun getCategorySummaries(): List<CategorySpendSummary>
+
+    @Query("SELECT effectivePlaceId, SUM(amountPaisa) as totalPaisa, COUNT(*) as count FROM transactions WHERE status = 'ACTIVE' AND direction = 'OUTGOING' GROUP BY effectivePlaceId ORDER BY totalPaisa DESC")
+    suspend fun getPlaceSummaries(): List<PlaceSpendSummary>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertTransactions(transactions: List<Transaction>)
+
+    @Update
+    suspend fun updateTransaction(transaction: Transaction)
+
+    @Query("UPDATE transactions SET status = 'REVERSED', reversedAt = :timestamp WHERE id = :id")
+    suspend fun reverseTransaction(id: String, timestamp: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET status = 'REVERSED', reversedAt = :timestamp WHERE sourceEventId = :eventId")
+    suspend fun reverseTransactionsByEvent(eventId: String, timestamp: Long = System.currentTimeMillis())
+
+    @Query("SELECT * FROM transactions WHERE sourceEventId = :eventId")
+    suspend fun getTransactionsForEvent(eventId: String): List<Transaction>
+
+    @Query("SELECT * FROM transactions ORDER BY loggedAt DESC")
+    suspend fun getAllTransactionsList(): List<Transaction>
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' ORDER BY occurrenceTime DESC, loggedAt DESC LIMIT :limit")
+    suspend fun getRecentTransactionsList(limit: Int = 10): List<Transaction>
+
+    @Query("SELECT * FROM transactions WHERE status = 'ACTIVE' AND category = :category ORDER BY occurrenceTime DESC")
+    suspend fun getTransactionsByCategory(category: String): List<Transaction>
+}
