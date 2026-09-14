@@ -32,19 +32,6 @@ jobs:
         run: |
           chmod +x triphisaab/gradlew
 
-      - name: Run Unit Tests
-        run: |
-          cd triphisaab
-          ./gradlew testDebugUnitTest --no-daemon --stacktrace --info
-
-      - name: Upload Test Report on Failure
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: test-reports
-          path: triphisaab/app/build/reports/tests/
-          retention-days: 7
-
       - name: Build Debug APK
         run: |
           cd triphisaab
@@ -63,6 +50,11 @@ jobs:
           name: TripHisaab-debug-apk
           path: build-output/TripHisaab-debug.apk
           retention-days: 30
+
+      - name: Run Unit Tests
+        run: |
+          cd triphisaab
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
       - name: Publish GitHub Release with APK
         uses: softprops/action-gh-release@v2
