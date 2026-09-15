@@ -35,16 +35,26 @@ jobs:
       - name: Build Debug APK
         run: |
           cd triphisaab
-          ./gradlew assembleDebug --no-daemon --stacktrace > ../build.log 2>&1 || {
-            echo "GRADLE BUILD FAILED"
-            tail -n 60 ../build.log
-            cd ..
-            git checkout -B debug-log
-            git add build.log
-            git -c user.name="CI" -c user.email="ci@github.com" commit -m "ci: debug build log"
-            git push origin debug-log --force
-            exit 1
-          }
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: build.log
+          retention-days: 7
+
+      - name: Publish Failure Log to Release
+        if: failure()
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-failure
+          name: Build Failure Log
+          body_path: build.log
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare APK Artifact
         run: |
