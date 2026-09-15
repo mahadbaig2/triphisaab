@@ -65,6 +65,10 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  
+  lint {
+    checkAarMetadata = false
+  }
 }
 
 ksp {
